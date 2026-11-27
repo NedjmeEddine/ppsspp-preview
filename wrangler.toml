@@ -1,9 +1,0 @@
-name = "ppsspp-preview"
-compatibility_date = "2024-09-23"
-pages_build_output_dir = "public"
-
-# Bind your Cloudflare R2 bucket for game packs & compiled cores
-# Create the bucket in Cloudflare dashboard or via CLI: npx wrangler r2 bucket create ppsspp-data
-[[r2_buckets]]
-binding = "BUCKET"
-bucket_name = "ppsspp-data"
