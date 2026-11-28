@@ -1,6 +1,6 @@
 /**
  * Cloudflare Worker with Static Assets + R2 Streaming
- * Replaces Pages Functions: handles /games.json, /games/*, /cores/*, and telemetry
+ * Handles /games.json, /games/*, /packs/*, /cores/*, and telemetry
  * while serving static assets from env.ASSETS with COOP/COEP isolation.
  */
 export default {
@@ -35,15 +35,29 @@ export default {
             }
         }
 
+        // Helper to query R2 across fallback candidate keys
+        async function getR2Object(candidates) {
+            if (!env.BUCKET) return null;
+            for (const key of candidates) {
+                try {
+                    const obj = await env.BUCKET.get(key, {
+                        range: request.headers,
+                        onlyIf: request.headers,
+                    });
+                    if (obj) return { obj, key };
+                } catch (_) {}
+            }
+            return null;
+        }
+
         // 2. Games catalog
         if (pathname === "/games.json" || pathname === "/api/games") {
-            if (!env.BUCKET) return new Response("R2 BUCKET not bound", { status: 500 });
-            const obj = await env.BUCKET.get("games.json", {
-                range: request.headers,
-                onlyIf: request.headers,
-            });
-            if (!obj) return new Response("games.json not found in R2", { status: 404 });
-
+            let res = await getR2Object(["games.json", "dist/games.json"]);
+            if (!res) {
+                // Fallback to static asset games.json if available
+                return env.ASSETS.fetch(request);
+            }
+            const { obj } = res;
             const headers = new Headers();
             obj.writeHttpMetadata(headers);
             headers.set("etag", obj.httpEtag);
@@ -55,22 +69,41 @@ export default {
         }
 
         // 3. Game manifests and 256MB pack streaming
-        if (pathname.startsWith("/games/")) {
-            if (!env.BUCKET) return new Response("R2 BUCKET not bound", { status: 500 });
-            const r2Key = pathname.slice(1); // e.g. games/ben10_ua/manifest.bin
-            const obj = await env.BUCKET.get(r2Key, {
-                range: request.headers,
-                onlyIf: request.headers,
-            });
-            if (!obj) return new Response(`Object ${r2Key} not found in R2`, { status: 404 });
+        if (pathname.startsWith("/games/") || pathname.startsWith("/packs/") || pathname === "/manifest.bin") {
+            if (!env.BUCKET) return new Response("R2 BUCKET not bound in Worker settings", { status: 500 });
 
+            const cleanPath = pathname.replace(/^\/+/, "");
+            const candidates = [cleanPath];
+
+            if (cleanPath.includes("/packs/")) {
+                candidates.push(cleanPath.replace("/packs/", "/"));
+            }
+            if (cleanPath.startsWith("games/")) {
+                const subPath = cleanPath.slice("games/".length);
+                candidates.push(subPath);
+                if (subPath.includes("/packs/")) {
+                    candidates.push(subPath.replace("/packs/", "/"));
+                }
+            }
+            const parts = cleanPath.split("/");
+            const filename = parts[parts.length - 1];
+            if (!candidates.includes(filename)) {
+                candidates.push(filename);
+            }
+
+            const res = await getR2Object(candidates);
+            if (!res) {
+                return new Response(`Object not found in R2 bucket.\nTried keys:\n- ${candidates.join("\n- ")}`, { status: 404 });
+            }
+
+            const { obj, key } = res;
             const headers = new Headers();
             obj.writeHttpMetadata(headers);
             headers.set("etag", obj.httpEtag);
             headers.set("Accept-Ranges", "bytes");
             headers.set("Cross-Origin-Opener-Policy", "same-origin");
             headers.set("Cross-Origin-Embedder-Policy", "require-corp");
-            if (r2Key.includes("/packs/")) {
+            if (key.includes("pak_")) {
                 headers.set("Cache-Control", "public, max-age=31536000, immutable");
             } else {
                 headers.set("Cache-Control", "no-cache");
@@ -80,21 +113,33 @@ export default {
 
         // 4. Core files (/cores/*)
         if (pathname.startsWith("/cores/")) {
-            if (!env.BUCKET) return new Response("R2 BUCKET not bound", { status: 500 });
-            const r2Key = pathname.slice(1);
-            const obj = await env.BUCKET.get(r2Key, {
-                range: request.headers,
-                onlyIf: request.headers,
-            });
-            if (!obj) return new Response(`Core ${r2Key} not found in R2`, { status: 404 });
+            if (!env.BUCKET) return new Response("R2 BUCKET not bound in Worker settings", { status: 500 });
+            const cleanPath = pathname.replace(/^\/+/, "");
+            const candidates = [cleanPath];
+            if (cleanPath.startsWith("cores/")) {
+                candidates.push(cleanPath.slice("cores/".length));
+            }
+            const parts = cleanPath.split("/");
+            const filename = parts[parts.length - 1];
+            if (!candidates.includes(filename)) {
+                candidates.push(filename);
+            }
 
+            const res = await getR2Object(candidates);
+            if (!res) {
+                const assetRes = await env.ASSETS.fetch(request);
+                if (assetRes.status !== 404) return assetRes;
+                return new Response(`Core object not found in R2.\nTried keys:\n- ${candidates.join("\n- ")}`, { status: 404 });
+            }
+
+            const { obj, key } = res;
             const headers = new Headers();
             obj.writeHttpMetadata(headers);
             headers.set("etag", obj.httpEtag);
             headers.set("Cross-Origin-Opener-Policy", "same-origin");
             headers.set("Cross-Origin-Embedder-Policy", "require-corp");
-            if (r2Key.endsWith(".wasm")) headers.set("Content-Type", "application/wasm");
-            if (r2Key.endsWith(".js")) headers.set("Content-Type", "text/javascript; charset=utf-8");
+            if (key.endsWith(".wasm")) headers.set("Content-Type", "application/wasm");
+            if (key.endsWith(".js")) headers.set("Content-Type", "text/javascript; charset=utf-8");
             headers.set("Cache-Control", "public, max-age=31536000, immutable");
             return new Response(obj.body, { headers, status: obj.range ? 206 : 200 });
         }

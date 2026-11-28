@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "games": [
+    {
+      "id": "ben10_ua",
+      "title": "Ben 10 Ultimate Alien: Cosmic Destruction",
+      "platform": "psp",
+      "discSize": 1340997632,
+      "blockShift": 18,
+      "poolMb": 64
+    },
+    {
+      "id": "gow_coo",
+      "title": "God of War: Chains of Olympus",
+      "platform": "psp",
+      "discSize": 1048576,
+      "blockShift": 18,
+      "poolMb": 64
+    },
+    {
+      "id": "crisis_core",
+      "title": "Crisis Core: Final Fantasy VII",
+      "platform": "psp",
+      "discSize": 1048576,
+      "blockShift": 18,
+      "poolMb": 64
+    }
+  ]
+}
